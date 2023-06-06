@@ -68,7 +68,6 @@ class Layer : public Entity
 {
 public:
   std::vector<std::string> names_;  ///< list of layer names
-  std::shared_ptr<rclcpp::Node> node_;
 
   Body * body_ = nullptr;
   CollisionFilterRegistry * cfr_;  ///< collision filter registry
@@ -134,7 +133,7 @@ public:
   /**
    * @brief Destructor for the layer class
    */
-  ~Layer();
+  ~Layer() override;
 
   /**
    * @return The list of names the layer has
