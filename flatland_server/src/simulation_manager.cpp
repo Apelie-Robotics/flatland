@@ -131,7 +131,7 @@ void SimulationManager::Main()
     world_->Update(timekeeper);  // Step physics by ros cycle time
 
     if (show_viz_ && update_viz) {
-      world_->DebugVisualize(false);                        // no need to update layer
+      world_->DebugVisualize();                        // no need to update layer
       DebugVisualization::Get(node_)->Publish(timekeeper);  // publish debug visualization
     }
 
