@@ -131,7 +131,7 @@ void SimulationManager::Main()
     world_->Update(timekeeper);  // Step physics by ros cycle time
 
     if (show_viz_ && update_viz) {
-      world_->DebugVisualize();                        // no need to update layer
+      world_->DebugVisualize(false);                        // no need to update layer
       DebugVisualization::Get(node_)->Publish(timekeeper);  // publish debug visualization
     }
 
@@ -149,7 +149,7 @@ void SimulationManager::Main()
     filtered_cycle_util = 0.99 * filtered_cycle_util + 0.01 * cycle_util;
 
     RCLCPP_INFO_THROTTLE(
-      rclcpp::get_logger("SimMan"), wall_clock, 1000,
+      rclcpp::get_logger("SimMan"), wall_clock, 10000,
       "utilization: min %.1f%% max %.1f%% ave %.1f%%  factor: %.1f", min_cycle_util, max_cycle_util,
       filtered_cycle_util, factor);
   }

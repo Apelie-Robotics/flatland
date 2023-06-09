@@ -282,6 +282,7 @@ void DebugVisualization::VisualizeLayer(std::string name, Body * body)
     marker.color.a = body->color_.a;
     marker.scale.x = marker.scale.y = marker.scale.z = 1.0;
     marker.frame_locked = true;
+    marker.lifetime = rclcpp::Duration::from_seconds(0);
     marker.pose.position.x = body->physics_body_->GetPosition().x;
     marker.pose.position.y = body->physics_body_->GetPosition().y;
 
