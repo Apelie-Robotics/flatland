@@ -51,6 +51,7 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/convert.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2/LinearMath/Transform.h>
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <pluginlib/class_list_macros.hpp>
@@ -59,17 +60,36 @@
 namespace flatland_plugins
 {
 
+namespace {
+
+tf2::Vector3 ToTF2(const b2Vec2& position) {
+  return tf2::Vector3(position.x, position.y, 0.);
+}
+
+tf2::Transform ToTF2(const b2Vec2& position, float heading) {
+  tf2::Transform transform;
+  transform.setOrigin(ToTF2(position));
+  tf2::Quaternion quaternion;
+  quaternion.setRPY(0., 0., heading);
+  transform.setRotation(quaternion);
+  return transform;
+}
+
+}  // namespace
+
 void DiffDrive::TwistCallback(const geometry_msgs::msg::Twist::SharedPtr msg) { twist_msg_ = msg; }
 
 void DiffDrive::OnInitialize(const YAML::Node & config)
 {
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
+  static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node_);
 
   YamlReader reader(node_, config);
   enable_odom_pub_ = reader.Get<bool>("enable_odom_pub", true);
   enable_twist_pub_ = reader.Get<bool>("enable_twist_pub", true);
   std::string body_name = reader.Get<std::string>("body");
   std::string odom_frame_id = reader.Get<std::string>("odom_frame_id", "odom");
+  std::string world_frame_id = reader.Get<std::string>("world_frame_id", "map");
 
   std::string twist_topic = reader.Get<std::string>("twist_sub", "cmd_vel");
   std::string odom_topic = reader.Get<std::string>("odom_pub", "odometry/filtered");
@@ -109,6 +129,18 @@ void DiffDrive::OnInitialize(const YAML::Node & config)
   if (body_ == nullptr) {
     throw YAMLException("Body with name " + Q(body_name) + " does not exist");
   }
+
+  // compute world to odom transform
+  b2Body * b2body = body_->physics_body_;
+  const tf2::Transform world_to_odom_transform =
+      ToTF2(b2body->GetPosition(), b2body->GetAngle());
+  odom_to_world_transform_ = world_to_odom_transform.inverse();
+  // publish world tf
+  geometry_msgs::msg::TransformStamped world_to_odom_transform_msg;
+  world_to_odom_transform_msg.header.frame_id = world_frame_id;
+  world_to_odom_transform_msg.child_frame_id = odom_frame_id;
+  world_to_odom_transform_msg.transform = tf2::toMsg(world_to_odom_transform);
+  static_tf_broadcaster_->sendTransform(world_to_odom_transform_msg);
 
   // publish and subscribe to topics
   using std::placeholders::_1;
@@ -165,25 +197,27 @@ void DiffDrive::BeforePhysicsStep(const Timekeeper & timekeeper)
 
   b2Body * b2body = body_->physics_body_;
 
-  b2Vec2 position = b2body->GetPosition();
-  float angle = b2body->GetAngle();
+  const b2Vec2 position = b2body->GetPosition();
+  const float angle = b2body->GetAngle();
+  const tf2::Transform world_to_base_transform = ToTF2(position, angle);
+  const tf2::Transform odom_to_base_transform =
+      odom_to_world_transform_ * world_to_base_transform;
 
   if (publish) {
     // get the state of the body and publish the data
-    b2Vec2 linear_vel_local = b2body->GetLinearVelocityFromLocalPoint(b2Vec2(0, 0));
+    const tf2::Vector3 linear_vel_in_world_frame =
+        ToTF2(b2body->GetLinearVelocityFromLocalPoint(b2Vec2(0, 0)));
+    const tf2::Vector3 linear_vel_in_base_frame =
+        world_to_base_transform.getBasis().transpose() *
+        linear_vel_in_world_frame;
     float angular_vel = b2body->GetAngularVelocity();
 
     ground_truth_msg_.header.stamp = timekeeper.GetSimTime();
-    ground_truth_msg_.pose.pose.position.x = position.x;
-    ground_truth_msg_.pose.pose.position.y = position.y;
-    ground_truth_msg_.pose.pose.position.z = 0;
-    tf2::Quaternion q;
-    q.setRPY(0, 0, angle);
-
-    ground_truth_msg_.pose.pose.orientation = tf2::toMsg(q);
-    ground_truth_msg_.twist.twist.linear.x = linear_vel_local.x;
-    ground_truth_msg_.twist.twist.linear.y = linear_vel_local.y;
-    ground_truth_msg_.twist.twist.linear.z = 0;
+    tf2::toMsg(odom_to_base_transform.getOrigin(),
+               ground_truth_msg_.pose.pose.position);
+    ground_truth_msg_.pose.pose.orientation =
+        tf2::toMsg(odom_to_base_transform.getRotation());
+    ground_truth_msg_.twist.twist.linear = tf2::toMsg(linear_vel_in_base_frame);
     ground_truth_msg_.twist.twist.angular.x = 0;
     ground_truth_msg_.twist.twist.angular.y = 0;
     ground_truth_msg_.twist.twist.angular.z = angular_vel;
@@ -194,6 +228,7 @@ void DiffDrive::BeforePhysicsStep(const Timekeeper & timekeeper)
     odom_msg_.twist.twist = ground_truth_msg_.twist.twist;
     odom_msg_.pose.pose.position.x += noise_gen_[0](rng_);
     odom_msg_.pose.pose.position.y += noise_gen_[1](rng_);
+    tf2::Quaternion q;
     q.setRPY(0, 0, angle + noise_gen_[2](rng_));
     odom_msg_.pose.pose.orientation = tf2::toMsg(q);
     odom_msg_.twist.twist.linear.x += noise_gen_[3](rng_);
@@ -213,8 +248,7 @@ void DiffDrive::BeforePhysicsStep(const Timekeeper & timekeeper)
       twist_pub_msg.header.frame_id = odom_msg_.child_frame_id;
 
       // Forward velocity in twist.linear.x
-      twist_pub_msg.twist.linear.x =
-        cos(angle) * linear_vel_local.x + sin(angle) * linear_vel_local.y + noise_gen_[3](rng_);
+      twist_pub_msg.twist.linear.x = linear_vel_in_base_frame.x() + noise_gen_[3](rng_);
 
       // Angular velocity in twist.angular.z
       twist_pub_msg.twist.angular.z = angular_vel + noise_gen_[5](rng_);
