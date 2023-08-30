@@ -228,8 +228,12 @@ void DiffDrive::BeforePhysicsStep(const Timekeeper & timekeeper)
     odom_msg_.twist.twist = ground_truth_msg_.twist.twist;
     odom_msg_.pose.pose.position.x += noise_gen_[0](rng_);
     odom_msg_.pose.pose.position.y += noise_gen_[1](rng_);
+
     tf2::Quaternion q;
-    q.setRPY(0, 0, angle + noise_gen_[2](rng_));
+    const float noisy_angle =
+        odom_to_base_transform.getRotation().getAngle() +
+        noise_gen_[2](rng_);
+    q.setRPY(0, 0, noisy_angle);
     odom_msg_.pose.pose.orientation = tf2::toMsg(q);
     odom_msg_.twist.twist.linear.x += noise_gen_[3](rng_);
     odom_msg_.twist.twist.linear.y += noise_gen_[4](rng_);
